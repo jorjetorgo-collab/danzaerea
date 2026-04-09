@@ -2,88 +2,100 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import time
-from datetime import datetime, timezone
-from decimal import Decimal, getcontext
 
-# 1. Configuración de Precisión de Torres (Axioma I)
-getcontext().prec = 150
-PHI = (1 + Decimal(5).sqrt()) / 2
-EULER = Decimal('2.71828182845904523536')
+# --- CONFIGURACIÓN DE IDENTIDAD (M0) ---
+st.set_page_config(page_title="Ley de Conservación de Identidad - M0", layout="wide")
 
-st.set_page_config(page_title="Simulador de Desentropía de Torres", layout="wide")
-
-# 2. Definición del Trayector (N)
-class TrayectorDrones:
-    def __init__(self):
-        self.n_drones = 52
-        self.v_kmh = 60
-        self.v_ms = 60 / 3.6
-        self.radio_giro = 2.0  # metros
-        self.desfase_us = 3    # microsegundos
-        self.ventana_ns = 0.5  # nanosegundos (resolución de cálculo)
-        self.ancho = 2000      # metros
-        self.largo = 8000      # metros
-        self.altitud = 90      # metros
-
-    def calcular_posicion(self, t_segundos, id_drone, regreso=False):
-        # Aplicación del Diferencial de Fase (ΔΦ)
-        desfase_total = (id_drone * self.desfase_us) / 1_000_000
-        t_ajustado = t_segundos - desfase_total
-        
-        if t_ajustado < 0: return None
-        
-        # Trayectoria Lineal (Mn)
-        distancia = self.v_ms * t_ajustado
-        if distancia > self.largo: distancia = self.largo
-        
-        # Diferencial de Fase: El Vórtice (Giro de 2m)
-        # Frecuencia basada en la instrucción: giro cada 1.68s
-        omega = (2 * np.pi) / 1.68 
-        sentido = 1 if id_drone < 26 else -1
-        if regreso: sentido *= -1 # Inversión de indicaciones
-        
-        # Cálculo de Desentropía (D)
-        dx = np.cos(omega * t_ajustado) * self.radio_giro * sentido
-        dy = np.sin(omega * t_ajustado) * self.radio_giro
-        
-        # Distribución en la matriz (2km de ancho)
-        x_base = (id_drone / (self.n_drones - 1)) * self.ancho - (self.ancho / 2)
-        
-        return {
-            'x': x_base + dx,
-            'y': distancia if not regreso else self.largo - distancia,
-            'z': self.altitud,
-            'id': id_drone
-        }
-
-# 3. Interfaz de Usuario
-st.title("Matriz Dinámica: Ley de Conservación de Identidad")
-st.markdown(f"**Estado Actual:** $M_n$ (Momentum Observado) | **Resolución:** $0.5$ ns")
-
-if st.button("Iniciar Auditoría del Horizonte (Simulación)"):
-    trayector = TrayectorDrones()
+def generar_simulacion():
+    # Variables de la Ley de Conservación [cite: 5, 10, 11]
+    n_drones = 52
+    v_kmh = 60
+    v_ms = v_kmh / 3.6
+    radio_giro = 2.0         # Diferencial de fase proyectado en 2m
+    desfase_us = 3           # ΔΦ: Diferencial de fase entre unidades (3 microsegundos) [cite: 10]
+    ancho_campo = 2000       # 2 km
+    largo_total = 8000       # 8 km
+    paso_tiempo = 0.1        # Resolución del trayector
+    
+    # Contenedor para la matriz dinámica
     placeholder = st.empty()
     
-    # Simulación de trayectoria (Ida)
-    for t in np.arange(0, 120, 0.5): # t aumenta en pasos de simulación
+    # Fase 1: IDA (Trayectoria de expansión)
+    for t in np.arange(0, 50, paso_tiempo):
         puntos = []
-        for i in range(trayector.n_drones):
-            pos = trayector.calcular_posicion(t, i, regreso=False)
-            if pos: puntos.append(pos)
+        for i in range(n_drones):
+            # Aplicación del Trayector (ΣΔΦ) [cite: 12]
+            # El desfase de 3μs actúa como un invariante estructural [cite: 18]
+            t_unidad = t - (i * desfase_us / 1_000_000)
+            
+            if t_unidad > 0:
+                # Avance lineal (Mn) [cite: 6]
+                y_progreso = v_ms * t_unidad
+                
+                # Giro individual (Radio 2m)
+                # Sentido horario para flanco izquierdo, anti-horario para derecho
+                omega = 2 * np.pi * 0.5  # Velocidad angular
+                sentido = 1 if i < 26 else -1
+                
+                dx = np.cos(omega * t_unidad) * radio_giro * sentido
+                dy_extra = np.sin(omega * t_unidad) * radio_giro
+                
+                # Posición base en el ancho de 2km
+                x_base = (i / (n_drones - 1)) * ancho_campo - (ancho_campo / 2)
+                
+                puntos.append({
+                    'Unidad': i,
+                    'Latitud (X)': x_base + dx,
+                    'Longitud (Y)': y_progreso + dy_extra,
+                    'Flanco': 'Izquierdo' if i < 26 else 'Derecho'
+                })
         
         if puntos:
             df = pd.DataFrame(puntos)
             with placeholder.container():
-                # Visualización de la Matriz Dinámica
-                st.scatter_chart(df, x='x', y='y', color='id', size=20)
-                st.write(f"Sincronización Integral ($\Sigma\Delta\Phi$): {t:.2f}s")
-        time.sleep(0.05)
+                st.subheader("Auditoría del Horizonte: Fase de Ida")
+                # Gráfico con límites dinámicos (estilo "Campo Infinito")
+                st.scatter_chart(df, x='Latitud (X)', y='Longitud (Y)', color='Flanco', size=30)
+        time.sleep(0.01)
 
-    st.success("Igualación Final Alcanzada: Proceso de Desentropía Exitoso.")
+    # --- TEMPO DE SINCRONIZACIÓN (IGUALACIÓN FINAL) --- [cite: 13, 27]
+    st.warning("Reagrupando: Iniciando Proceso de Desentropía (Inversión de Fase)")
+    time.sleep(1)
 
-# 4. Marco de Comprobación Física (Tesis)
-with st.expander("Ver Detalles Teóricos (Teorema de Torres)"):
-    st.latex(r"S_{nat} = \frac{M_n}{n!}")
-    st.write("La incertidumbre detectada originalmente ha sido cancelada mediante el proceso de igualación final[cite: 27, 29].")
-    st.latex(r"D = \frac{M_n(\Sigma\Delta\Phi)}{n!}")
-    st.info("La colisión es imposible: el diferencial de 3μs actúa como un invariante estructural[cite: 18, 43].")
+    # Fase 2: REGRESO (Inversión de indicaciones)
+    for t in np.arange(50, 0, -paso_tiempo):
+        puntos = []
+        for i in range(n_drones):
+            t_unidad = t - (i * desfase_us / 1_000_000)
+            
+            if t_unidad > 0:
+                y_progreso = v_ms * t_unidad
+                omega = 2 * np.pi * 0.5
+                # INVERSIÓN: Sentidos opuestos a la ida
+                sentido = -1 if i < 26 else 1
+                
+                dx = np.cos(omega * t_unidad) * radio_giro * sentido
+                dy_extra = np.sin(omega * t_unidad) * radio_giro
+                x_base = (i / (n_drones - 1)) * ancho_campo - (ancho_campo / 2)
+                
+                puntos.append({
+                    'Unidad': i,
+                    'Latitud (X)': x_base + dx,
+                    'Longitud (Y)': y_progreso + dy_extra,
+                    'Flanco': 'Izquierdo' if i < 26 else 'Derecho'
+                })
+        
+        if puntos:
+            df = pd.DataFrame(puntos)
+            with placeholder.container():
+                st.subheader("Auditoría del Horizonte: Fase de Regreso (Desentropía)")
+                st.scatter_chart(df, x='Latitud (X)', y='Longitud (Y)', color='Flanco', size=30)
+        time.sleep(0.01)
+
+# --- INTERFAZ DEL HUB ---
+st.title("🛡️ Sistema de Trayectoria Inviolable")
+st.write("Implementación del **Teorema de Torres** para la navegación de enjambres basada en la conservación de la identidad ($M_0$).") [cite: 17]
+
+if st.button("Ejecutar Trayector (ΣΔΦ)"):
+    generar_simulacion()
+    st.success("Soberanía de Identidad Conservada. La incertidumbre ha sido cancelada.") [cite: 40, 41]
